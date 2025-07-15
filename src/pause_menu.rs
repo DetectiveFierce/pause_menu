@@ -180,14 +180,6 @@ impl PauseMenu {
         }
     }
 
-    pub fn toggle(&mut self) {
-        if self.visible {
-            self.hide();
-        } else {
-            self.show();
-        }
-    }
-
     pub fn is_visible(&self) -> bool {
         self.visible
     }
