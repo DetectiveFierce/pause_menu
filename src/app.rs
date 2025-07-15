@@ -1,5 +1,5 @@
 use crate::game;
-use crate::game::{GameUIManager, PauseMenuState};
+use crate::game::{CurrentScreen, GameState};
 use crate::pause_menu::{PauseMenu, PauseMenuAction};
 use crate::text::TextRenderer;
 use egui_wgpu::wgpu;
@@ -18,8 +18,7 @@ pub struct AppState {
     pub surface: wgpu::Surface<'static>,
     pub pause_menu: PauseMenu,
     pub text_renderer: TextRenderer,
-    pub game_ui: GameUIManager,
-    pub pause_menu_state: PauseMenuState,
+    pub game_state: GameState,
 }
 
 impl AppState {
@@ -77,14 +76,9 @@ impl AppState {
 
         let pause_menu = PauseMenu::new(&device, &queue, surface_config.format, window);
         let mut text_renderer = TextRenderer::new(&device, &queue, surface_config.format, window);
-        let mut game_ui = GameUIManager::new();
-        game_ui.start_timer(None);
-        game::initialize_game_ui(&mut text_renderer, &game_ui, window);
-        let pause_menu_state = if pause_menu.is_visible() {
-            PauseMenuState::Open
-        } else {
-            PauseMenuState::Closed
-        };
+        let mut game_state = GameState::new();
+        game_state.game_ui.start_timer(None);
+        game::initialize_game_ui(&mut text_renderer, &game_state.game_ui, window);
         Self {
             device,
             queue,
@@ -92,8 +86,7 @@ impl AppState {
             surface_config,
             pause_menu,
             text_renderer,
-            game_ui,
-            pause_menu_state,
+            game_state,
         }
     }
 
@@ -105,7 +98,7 @@ impl AppState {
         self.pause_menu.resize(&self.queue, resolution);
         self.text_renderer.resize(&self.queue, resolution);
         // Re-initialize game UI text positions with the actual window
-        game::initialize_game_ui(&mut self.text_renderer, &self.game_ui, window);
+        game::initialize_game_ui(&mut self.text_renderer, &self.game_state.game_ui, window);
     }
 }
 
@@ -266,6 +259,12 @@ impl App {
         // --- End vertical dashed line ---
 
         // --- Game UI: update and render timer/score/level ---
+        // Update timer/score/level based on current_screen
+        game::update_game_ui(
+            &mut state.text_renderer,
+            &mut state.game_state.game_ui,
+            &state.game_state.current_screen,
+        );
 
         // --- Debug Info Panel ---
         if state.pause_menu.is_debug_panel_visible() {
@@ -331,8 +330,9 @@ impl App {
         }
         // --- End Game UI ---
 
-        // Render pause menu if visible (overlay comes after text)
-        if state.pause_menu.is_visible() {
+        // Show pause menu if current_screen == Pause
+        if state.game_state.current_screen == CurrentScreen::Pause {
+            state.pause_menu.show();
             // Prepare pause menu for rendering
             if let Err(e) =
                 state
@@ -386,19 +386,22 @@ impl App {
             if let Err(e) = state.pause_menu.render(&state.device, &mut render_pass) {
                 println!("Failed to render pause menu: {}", e);
             }
-            state.pause_menu_state = PauseMenuState::Open;
         } else {
+            state.pause_menu.hide();
             // Explicitly clear rectangles if menu is not visible
             state
                 .pause_menu
                 .button_manager
                 .rectangle_renderer
                 .clear_rectangles();
-            state.pause_menu_state = PauseMenuState::Closed;
         }
 
         state.queue.submit(Some(encoder.finish()));
         surface_texture.present();
+        // Request another redraw to keep the timer updating
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
     }
 }
 
@@ -413,25 +416,27 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         let state = self.state.as_mut().unwrap();
 
-        // Handle pause menu input first
-        state.pause_menu.handle_input(&event);
-
-        // Check for pause menu actions
-        match state.pause_menu.get_last_action() {
-            PauseMenuAction::Resume => {
-                state.pause_menu.hide();
+        // Handle pause menu input first if in Pause screen and menu is visible
+        if state.game_state.current_screen == CurrentScreen::Pause && state.pause_menu.is_visible()
+        {
+            state.pause_menu.handle_input(&event);
+            // Check for pause menu actions
+            match state.pause_menu.get_last_action() {
+                PauseMenuAction::Resume => {
+                    state.game_state.current_screen = CurrentScreen::Game;
+                    state.game_state.game_ui.resume_timer();
+                }
+                PauseMenuAction::Settings => {
+                    // TODO: Implement settings menu
+                }
+                PauseMenuAction::Restart => {
+                    // TODO: Implement level restart
+                }
+                PauseMenuAction::QuitToMenu => {
+                    event_loop.exit();
+                }
+                PauseMenuAction::None => {}
             }
-            PauseMenuAction::Settings => {
-                // TODO: Implement settings menu
-            }
-            PauseMenuAction::Restart => {
-                // TODO: Implement level restart
-            }
-            PauseMenuAction::QuitToMenu => {
-                event_loop.exit();
-            }
-
-            PauseMenuAction::None => {}
         }
 
         // Handle keyboard events for pause menu toggle
@@ -440,7 +445,13 @@ impl ApplicationHandler for App {
                 if let winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Escape) =
                     event.physical_key
                 {
-                    state.pause_menu.toggle();
+                    if state.game_state.current_screen == CurrentScreen::Pause {
+                        state.game_state.current_screen = CurrentScreen::Game;
+                        state.game_state.game_ui.resume_timer();
+                    } else {
+                        state.game_state.current_screen = CurrentScreen::Pause;
+                        state.game_state.game_ui.pause_timer();
+                    }
                     if let Some(window) = self.window.as_ref() {
                         window.request_redraw();
                     }

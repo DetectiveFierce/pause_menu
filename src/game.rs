@@ -1,12 +1,113 @@
 use crate::text::{TextPosition, TextRenderer, TextStyle};
 use glyphon::Color;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use winit::window::Window;
 
+// Add the full definition of GameState and CurrentScreen
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PauseMenuState {
-    Open,
-    Closed,
+pub enum CurrentScreen {
+    Loading,
+    Game,
+    Pause,
+    GameOver,
+    NewGame,
+}
+
+pub struct GameState {
+    /// The player character.
+    // pub player: Player,
+    /// Time of the last frame.
+    pub last_frame_time: Instant,
+    /// Time elapsed since the last frame (seconds).
+    pub delta_time: f32,
+    /// Number of frames rendered since start.
+    pub frame_count: u32,
+    /// Current frames per second.
+    pub current_fps: u32,
+    /// Time of the last FPS update.
+    pub last_fps_time: Instant,
+    /// Path to the currently loaded maze, if any.
+    pub maze_path: Option<PathBuf>,
+    /// Whether the mouse is captured for camera movement.
+    pub capture_mouse: bool,
+    /// Handles collisions between game entities.
+    // pub collision_system: CollisionSystem,
+    /// Whether the exit has been reached.
+    pub exit_reached: bool,
+    // pub exit_cell: Option<Cell>,
+    pub game_ui: GameUIManager,
+    pub current_screen: CurrentScreen,
+    // pub enemy: Enemy,
+    // pub audio_manager: GameAudioManager,
+}
+
+impl Default for GameState {
+    /// Returns a new [`GameState`] with default values.
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GameState {
+    /// Creates a new [`GameState`] with default player, timing, and UI state.
+    pub fn new() -> Self {
+        // let mut audio_manager =
+        //     GameAudioManager::new().expect("Failed to initialize audio manager");
+        // audio_manager
+        //     .spawn_enemy("enemy".to_string(), [-0.5, 30.0, 0.0])
+        //     .expect("Failed to spawn enemy");
+        Self {
+            // player: Player::new(),
+            last_frame_time: Instant::now(),
+            delta_time: 0.0,
+            frame_count: 0,
+            current_fps: 0,
+            last_fps_time: Instant::now(),
+            maze_path: None,
+            capture_mouse: true,
+            // collision_system: CollisionSystem::new(
+            //     5.0,   // player_radius (adjust based on your player size)
+            //     100.0, // player_height (adjust based on your player size)),
+            // ),
+            exit_reached: false,
+            // exit_cell: None,
+            game_ui: GameUIManager::new(),
+            current_screen: CurrentScreen::Loading,
+            // enemy: Enemy::new([-0.5, 30.0, 0.0], 150.0),
+            // audio_manager,
+        }
+    }
+
+    /// Start the game timer
+    pub fn start_game_timer(&mut self, config: Option<TimerConfig>) {
+        self.game_ui.start_timer(config);
+    }
+
+    /// Stop the game timer
+    pub fn stop_game_timer(&mut self) {
+        self.game_ui.stop_timer();
+    }
+
+    /// Reset the game timer
+    pub fn reset_game_timer(&mut self) {
+        self.game_ui.reset_timer();
+    }
+
+    /// Check if the game timer is expired
+    pub fn is_game_timer_expired(&self) -> bool {
+        self.game_ui.is_timer_expired()
+    }
+
+    /// Update game level
+    pub fn set_level(&mut self, level: i32) {
+        self.game_ui.set_level(level);
+    }
+
+    /// Update game score
+    pub fn set_score(&mut self, score: u32) {
+        self.game_ui.set_score(score);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -347,14 +448,9 @@ fn update_text_content(
 pub fn update_game_ui(
     text_renderer: &mut TextRenderer,
     game_ui: &mut GameUIManager,
-    pause_menu_state: &PauseMenuState,
+    _current_screen: &CurrentScreen,
 ) -> bool {
-    // Pause/resume timer based on pause menu state
-    match pause_menu_state {
-        PauseMenuState::Open => game_ui.pause_timer(),
-        PauseMenuState::Closed => game_ui.resume_timer(),
-    }
-
+    // Only update the timer, do not pause/resume here
     let timer_expired = game_ui.update_timer();
 
     // Update timer display
