@@ -1,5 +1,8 @@
 mod app;
-mod egui_tools;
+mod button;
+mod pause_menu;
+mod rectangle;
+mod text;
 
 use winit::event_loop::{ControlFlow, EventLoop};
 
@@ -19,3 +22,5 @@ async fn run() {
 
     event_loop.run_app(&mut app).expect("Failed to run app");
 }
+
+pub mod game;

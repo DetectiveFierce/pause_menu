@@ -1,5 +1,5 @@
 [package]
-name = "egui-rust-wgpu-hello"
+name = "menu"
 version = "1.0.0"
 edition = "2021"
 
@@ -9,3 +9,5 @@ egui-wgpu = { version = "0.31.1",features = ["winit"] }
 egui-winit = "0.31.1"
 winit = "0.30.9"
 pollster = "0.4.0"
+glyphon = "0.8.0"
+bytemuck = { version = "1.14", features = ["derive"] }
