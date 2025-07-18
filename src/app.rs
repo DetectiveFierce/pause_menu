@@ -1,7 +1,8 @@
 use crate::game;
 use crate::game::{CurrentScreen, GameState};
 use crate::pause_menu::{PauseMenu, PauseMenuAction};
-use crate::text::TextRenderer;
+use crate::ui::text::TextRenderer;
+use crate::upgrade_menu::{UpgradeMenu, UpgradeMenuAction};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::SurfaceError;
 use std::sync::Arc;
@@ -17,6 +18,7 @@ pub struct AppState {
     pub surface_config: wgpu::SurfaceConfiguration,
     pub surface: wgpu::Surface<'static>,
     pub pause_menu: PauseMenu,
+    pub upgrade_menu: UpgradeMenu,
     pub text_renderer: TextRenderer,
     pub game_state: GameState,
 }
@@ -75,6 +77,7 @@ impl AppState {
         surface.configure(&device, &surface_config);
 
         let pause_menu = PauseMenu::new(&device, &queue, surface_config.format, window);
+        let upgrade_menu = UpgradeMenu::new(&device, &queue, surface_config.format, window);
         let mut text_renderer = TextRenderer::new(&device, &queue, surface_config.format, window);
         let mut game_state = GameState::new();
         game_state.game_ui.start_timer(None);
@@ -85,6 +88,7 @@ impl AppState {
             surface,
             surface_config,
             pause_menu,
+            upgrade_menu,
             text_renderer,
             game_state,
         }
@@ -96,6 +100,7 @@ impl AppState {
         self.surface.configure(&self.device, &self.surface_config);
         let resolution = glyphon::Resolution { width, height };
         self.pause_menu.resize(&self.queue, resolution);
+        self.upgrade_menu.resize(&self.queue, resolution);
         self.text_renderer.resize(&self.queue, resolution);
         // Re-initialize game UI text positions with the actual window
         game::initialize_game_ui(&mut self.text_renderer, &self.game_state.game_ui, window);
@@ -225,7 +230,7 @@ impl App {
             let mut y = 0.0;
             while y < h {
                 let dash_h = dash_height.min(h - y);
-                dashes.push(crate::rectangle::Rectangle::new(
+                dashes.push(crate::ui::rectangle::Rectangle::new(
                     center_x - dash_width / 2.0,
                     y,
                     dash_width,
@@ -268,12 +273,18 @@ impl App {
 
         // --- Debug Info Panel ---
         if state.pause_menu.is_debug_panel_visible() {
+            // Update performance metrics
+            state.game_state.update_performance_metrics();
+
             let window_size = &state.surface_config;
             let debug_text = format!(
-                "Window Size: {} x {}",
-                window_size.width, window_size.height
+                "Window: {}x{} | FPS: {} | Avg Frame: {:.2}ms",
+                window_size.width,
+                window_size.height,
+                state.game_state.current_fps,
+                state.game_state.avg_frame_time * 1000.0
             );
-            use crate::text::{TextPosition, TextStyle};
+            use crate::ui::text::{TextPosition, TextStyle};
             use glyphon::Color;
             let style = TextStyle {
                 font_family: "HankenGrotesk".to_string(),
@@ -284,9 +295,9 @@ impl App {
                 style: glyphon::Style::Normal,
             };
             let pos = TextPosition {
-                x: window_size.width as f32 - 320.0,
+                x: window_size.width as f32 - 420.0,
                 y: 20.0,
-                max_width: Some(300.0),
+                max_width: Some(400.0),
                 max_height: Some(40.0),
             };
             state.text_renderer.create_text_buffer(
@@ -332,7 +343,7 @@ impl App {
 
         // Show pause menu if current_screen == Pause
         if state.game_state.current_screen == CurrentScreen::Pause {
-            state.pause_menu.show();
+            state.pause_menu.show(state.game_state.test_mode);
             // Prepare pause menu for rendering
             if let Err(e) =
                 state
@@ -368,7 +379,7 @@ impl App {
                 .pause_menu
                 .button_manager
                 .rectangle_renderer
-                .add_rectangle(crate::rectangle::Rectangle::new(
+                .add_rectangle(crate::ui::rectangle::Rectangle::new(
                     0.0,
                     0.0,
                     w,
@@ -391,6 +402,72 @@ impl App {
             // Explicitly clear rectangles if menu is not visible
             state
                 .pause_menu
+                .button_manager
+                .rectangle_renderer
+                .clear_rectangles();
+        }
+
+        // Show upgrade menu if current_screen == Upgrade
+        if state.game_state.current_screen == CurrentScreen::Upgrade {
+            state.upgrade_menu.show();
+            // Prepare upgrade menu for rendering
+            if let Err(e) =
+                state
+                    .upgrade_menu
+                    .prepare(&state.device, &state.queue, &state.surface_config)
+            {
+                println!("Failed to prepare upgrade menu: {}", e);
+            }
+
+            // Create a render pass for the upgrade menu
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &surface_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                label: Some("upgrade menu render pass"),
+                occlusion_query_set: None,
+            });
+
+            // --- Add semi-transparent grey overlay ---
+            let overlay_color = [0.08, 0.09, 0.11, 0.88]; // darker, neutral semi-transparent grey
+            let (w, h) = (
+                state.surface_config.width as f32,
+                state.surface_config.height as f32,
+            );
+            state
+                .upgrade_menu
+                .button_manager
+                .rectangle_renderer
+                .add_rectangle(crate::ui::rectangle::Rectangle::new(
+                    0.0,
+                    0.0,
+                    w,
+                    h,
+                    overlay_color,
+                ));
+            state
+                .upgrade_menu
+                .button_manager
+                .rectangle_renderer
+                .render(&state.device, &mut render_pass);
+            // --- End overlay ---
+
+            // Render the upgrade menu
+            if let Err(e) = state.upgrade_menu.render(&state.device, &mut render_pass) {
+                println!("Failed to render upgrade menu: {}", e);
+            }
+        } else {
+            state.upgrade_menu.hide();
+            // Explicitly clear rectangles if menu is not visible
+            state
+                .upgrade_menu
                 .button_manager
                 .rectangle_renderer
                 .clear_rectangles();
@@ -432,6 +509,9 @@ impl ApplicationHandler for App {
                 PauseMenuAction::Restart => {
                     // TODO: Implement level restart
                 }
+                PauseMenuAction::ToggleTestMode => {
+                    state.game_state.test_mode = !state.game_state.test_mode;
+                }
                 PauseMenuAction::QuitToMenu => {
                     event_loop.exit();
                 }
@@ -439,7 +519,30 @@ impl ApplicationHandler for App {
             }
         }
 
-        // Handle keyboard events for pause menu toggle
+        // Handle upgrade menu input if in Upgrade screen and menu is visible
+        if state.game_state.current_screen == CurrentScreen::Upgrade
+            && state.upgrade_menu.is_visible()
+        {
+            state.upgrade_menu.handle_input(&event);
+            // Check for upgrade menu actions
+            match state.upgrade_menu.get_last_action() {
+                UpgradeMenuAction::SelectUpgrade1 => {
+                    // TODO: Implement upgrade 1 selection
+                    println!("Upgrade 1 selected!");
+                }
+                UpgradeMenuAction::SelectUpgrade2 => {
+                    // TODO: Implement upgrade 2 selection
+                    println!("Upgrade 2 selected!");
+                }
+                UpgradeMenuAction::SelectUpgrade3 => {
+                    // TODO: Implement upgrade 3 selection
+                    println!("Upgrade 3 selected!");
+                }
+                UpgradeMenuAction::None => {}
+            }
+        }
+
+        // Handle keyboard events for menu navigation
         if let WindowEvent::KeyboardInput { event, .. } = &event {
             if event.state == ElementState::Pressed {
                 if let winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Escape) =
@@ -452,6 +555,16 @@ impl ApplicationHandler for App {
                         state.game_state.current_screen = CurrentScreen::Pause;
                         state.game_state.game_ui.pause_timer();
                     }
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
+
+                // Add key to switch to upgrade menu (U key)
+                if let winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyU) =
+                    event.physical_key
+                {
+                    state.game_state.current_screen = CurrentScreen::Upgrade;
                     if let Some(window) = self.window.as_ref() {
                         window.request_redraw();
                     }

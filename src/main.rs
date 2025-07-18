@@ -1,8 +1,7 @@
 mod app;
-mod button;
 mod pause_menu;
-mod rectangle;
-mod text;
+mod ui;
+mod upgrade_menu;
 
 use winit::event_loop::{ControlFlow, EventLoop};
 

@@ -1,4 +1,4 @@
-use crate::text::{TextPosition, TextRenderer, TextStyle};
+use crate::ui::text::{TextPosition, TextRenderer, TextStyle};
 use glyphon::Color;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -12,6 +12,7 @@ pub enum CurrentScreen {
     Pause,
     GameOver,
     NewGame,
+    Upgrade,
 }
 
 pub struct GameState {
@@ -38,8 +39,13 @@ pub struct GameState {
     // pub exit_cell: Option<Cell>,
     pub game_ui: GameUIManager,
     pub current_screen: CurrentScreen,
+    /// Whether test mode is enabled.
+    pub test_mode: bool,
     // pub enemy: Enemy,
     // pub audio_manager: GameAudioManager,
+    /// Performance monitoring
+    pub frame_times: Vec<f32>,
+    pub avg_frame_time: f32,
 }
 
 impl Default for GameState {
@@ -52,30 +58,23 @@ impl Default for GameState {
 impl GameState {
     /// Creates a new [`GameState`] with default player, timing, and UI state.
     pub fn new() -> Self {
-        // let mut audio_manager =
-        //     GameAudioManager::new().expect("Failed to initialize audio manager");
-        // audio_manager
-        //     .spawn_enemy("enemy".to_string(), [-0.5, 30.0, 0.0])
-        //     .expect("Failed to spawn enemy");
+        let now = Instant::now();
         Self {
-            // player: Player::new(),
-            last_frame_time: Instant::now(),
+            last_frame_time: now,
             delta_time: 0.0,
             frame_count: 0,
             current_fps: 0,
-            last_fps_time: Instant::now(),
+            last_fps_time: now,
             maze_path: None,
-            capture_mouse: true,
-            // collision_system: CollisionSystem::new(
-            //     5.0,   // player_radius (adjust based on your player size)
-            //     100.0, // player_height (adjust based on your player size)),
-            // ),
+            capture_mouse: false,
             exit_reached: false,
-            // exit_cell: None,
             game_ui: GameUIManager::new(),
-            current_screen: CurrentScreen::Loading,
+            current_screen: CurrentScreen::Upgrade,
+            test_mode: false,
             // enemy: Enemy::new([-0.5, 30.0, 0.0], 150.0),
             // audio_manager,
+            frame_times: Vec::new(),
+            avg_frame_time: 0.0,
         }
     }
 
@@ -107,6 +106,32 @@ impl GameState {
     /// Update game score
     pub fn set_score(&mut self, score: u32) {
         self.game_ui.set_score(score);
+    }
+
+    pub fn update_performance_metrics(&mut self) {
+        let now = Instant::now();
+        self.delta_time = now.duration_since(self.last_frame_time).as_secs_f32();
+        self.last_frame_time = now;
+        self.frame_count += 1;
+
+        // Update FPS every second
+        if now.duration_since(self.last_fps_time).as_secs() >= 1 {
+            self.current_fps = self.frame_count;
+            self.frame_count = 0;
+            self.last_fps_time = now;
+        }
+
+        // Track frame times for performance monitoring
+        self.frame_times.push(self.delta_time);
+        if self.frame_times.len() > 60 {
+            self.frame_times.remove(0);
+        }
+
+        // Calculate average frame time
+        if !self.frame_times.is_empty() {
+            self.avg_frame_time =
+                self.frame_times.iter().sum::<f32>() / self.frame_times.len() as f32;
+        }
     }
 }
 

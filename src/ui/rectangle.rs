@@ -100,13 +100,16 @@ pub struct RectangleRenderer {
     rectangles: Vec<Rectangle>,
     window_width: f32,
     window_height: f32,
+    cached_vertex_buffer: Option<wgpu::Buffer>,
+    cached_index_buffer: Option<wgpu::Buffer>,
+    cached_rectangle_count: usize,
 }
 
 impl RectangleRenderer {
     pub fn new(device: &Device, surface_format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Rectangle Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/rectangle.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/rectangle.wgsl").into()),
         });
 
         let render_pipeline_layout =
@@ -159,6 +162,9 @@ impl RectangleRenderer {
             rectangles: Vec::new(),
             window_width: 1360.0,
             window_height: 768.0,
+            cached_vertex_buffer: None,
+            cached_index_buffer: None,
+            cached_rectangle_count: 0,
         }
     }
 
@@ -168,11 +174,19 @@ impl RectangleRenderer {
 
     pub fn clear_rectangles(&mut self) {
         self.rectangles.clear();
+        // Clear cached buffers when rectangles are cleared
+        self.cached_vertex_buffer = None;
+        self.cached_index_buffer = None;
+        self.cached_rectangle_count = 0;
     }
 
     pub fn resize(&mut self, width: f32, height: f32) {
         self.window_width = width;
         self.window_height = height;
+        // Clear cached buffers when window is resized
+        self.cached_vertex_buffer = None;
+        self.cached_index_buffer = None;
+        self.cached_rectangle_count = 0;
     }
 
     pub fn render(&mut self, device: &Device, render_pass: &mut RenderPass) {
@@ -182,90 +196,105 @@ impl RectangleRenderer {
 
         render_pass.set_pipeline(&self.render_pipeline);
 
-        // Create all vertices for all rectangles in one batch
-        let mut all_vertices = Vec::new();
-        let mut all_indices = Vec::new();
+        // Check if we can reuse cached buffers
+        let need_new_buffers = self.cached_rectangle_count != self.rectangles.len();
 
-        for (rect_index, rectangle) in self.rectangles.iter().enumerate() {
-            // Convert screen coordinates to normalized device coordinates
-            // Note: Y-axis is flipped in screen coordinates (0,0 is top-left)
-            let x = (rectangle.x / self.window_width) * 2.0 - 1.0;
-            let y = 1.0 - (rectangle.y / self.window_height) * 2.0; // Flip Y-axis
-            let width = (rectangle.width / self.window_width) * 2.0;
-            let height = -(rectangle.height / self.window_height) * 2.0; // Negative because Y is flipped
+        if need_new_buffers {
+            // Create all vertices for all rectangles in one batch
+            let mut all_vertices = Vec::new();
+            let mut all_indices = Vec::new();
 
-            // Create vertices for this rectangle
-            let vertices = [
-                // Top-left
-                Vertex {
-                    position: [x, y],
-                    color: rectangle.color,
-                    uv: [0.0, 0.0],
-                    rect_size: [rectangle.width, rectangle.height],
-                    corner_radius: rectangle.corner_radius,
-                    _padding: 0.0,
-                },
-                // Top-right
-                Vertex {
-                    position: [x + width, y],
-                    color: rectangle.color,
-                    uv: [rectangle.width, 0.0],
-                    rect_size: [rectangle.width, rectangle.height],
-                    corner_radius: rectangle.corner_radius,
-                    _padding: 0.0,
-                },
-                // Bottom-right
-                Vertex {
-                    position: [x + width, y + height],
-                    color: rectangle.color,
-                    uv: [rectangle.width, rectangle.height],
-                    rect_size: [rectangle.width, rectangle.height],
-                    corner_radius: rectangle.corner_radius,
-                    _padding: 0.0,
-                },
-                // Bottom-left
-                Vertex {
-                    position: [x, y + height],
-                    color: rectangle.color,
-                    uv: [0.0, rectangle.height],
-                    rect_size: [rectangle.width, rectangle.height],
-                    corner_radius: rectangle.corner_radius,
-                    _padding: 0.0,
-                },
-            ];
+            for (rect_index, rectangle) in self.rectangles.iter().enumerate() {
+                // Convert screen coordinates to normalized device coordinates
+                // Note: Y-axis is flipped in screen coordinates (0,0 is top-left)
+                let x = (rectangle.x / self.window_width) * 2.0 - 1.0;
+                let y = 1.0 - (rectangle.y / self.window_height) * 2.0; // Flip Y-axis
+                let width = (rectangle.width / self.window_width) * 2.0;
+                let height = -(rectangle.height / self.window_height) * 2.0; // Negative because Y is flipped
 
-            // Add vertices to the batch
-            all_vertices.extend_from_slice(&vertices);
+                // Create vertices for this rectangle
+                let vertices = [
+                    // Top-left
+                    Vertex {
+                        position: [x, y],
+                        color: rectangle.color,
+                        uv: [0.0, 0.0],
+                        rect_size: [rectangle.width, rectangle.height],
+                        corner_radius: rectangle.corner_radius,
+                        _padding: 0.0,
+                    },
+                    // Top-right
+                    Vertex {
+                        position: [x + width, y],
+                        color: rectangle.color,
+                        uv: [rectangle.width, 0.0],
+                        rect_size: [rectangle.width, rectangle.height],
+                        corner_radius: rectangle.corner_radius,
+                        _padding: 0.0,
+                    },
+                    // Bottom-right
+                    Vertex {
+                        position: [x + width, y + height],
+                        color: rectangle.color,
+                        uv: [rectangle.width, rectangle.height],
+                        rect_size: [rectangle.width, rectangle.height],
+                        corner_radius: rectangle.corner_radius,
+                        _padding: 0.0,
+                    },
+                    // Bottom-left
+                    Vertex {
+                        position: [x, y + height],
+                        color: rectangle.color,
+                        uv: [0.0, rectangle.height],
+                        rect_size: [rectangle.width, rectangle.height],
+                        corner_radius: rectangle.corner_radius,
+                        _padding: 0.0,
+                    },
+                ];
 
-            // Create indices for this rectangle (offset by the current vertex count)
-            let base_index = (rect_index * 4) as u16;
-            let indices = [
-                base_index,
-                base_index + 1,
-                base_index + 2,
-                base_index,
-                base_index + 2,
-                base_index + 3,
-            ];
-            all_indices.extend_from_slice(&indices);
+                // Add vertices to the batch
+                all_vertices.extend_from_slice(&vertices);
+
+                // Create indices for this rectangle (offset by the current vertex count)
+                let base_index = (rect_index * 4) as u16;
+                let indices = [
+                    base_index,
+                    base_index + 1,
+                    base_index + 2,
+                    base_index,
+                    base_index + 2,
+                    base_index + 3,
+                ];
+                all_indices.extend_from_slice(&indices);
+            }
+
+            // Create new vertex buffer for all rectangles
+            let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Rectangle Vertex Buffer"),
+                contents: bytemuck::cast_slice(&all_vertices),
+                usage: BufferUsages::VERTEX,
+            });
+
+            // Create new index buffer for all rectangles
+            let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Rectangle Index Buffer"),
+                contents: bytemuck::cast_slice(&all_indices),
+                usage: BufferUsages::INDEX,
+            });
+
+            // Cache the new buffers
+            self.cached_vertex_buffer = Some(vertex_buffer);
+            self.cached_index_buffer = Some(index_buffer);
+            self.cached_rectangle_count = self.rectangles.len();
         }
 
-        // Create vertex buffer for all rectangles
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Rectangle Vertex Buffer"),
-            contents: bytemuck::cast_slice(&all_vertices),
-            usage: BufferUsages::VERTEX,
-        });
-
-        // Create index buffer for all rectangles
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Rectangle Index Buffer"),
-            contents: bytemuck::cast_slice(&all_indices),
-            usage: BufferUsages::INDEX,
-        });
-
-        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        render_pass.draw_indexed(0..all_indices.len() as u32, 0, 0..1);
+        // Use cached buffers
+        if let (Some(vertex_buffer), Some(index_buffer)) =
+            (&self.cached_vertex_buffer, &self.cached_index_buffer)
+        {
+            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..(self.rectangles.len() * 6) as u32, 0, 0..1);
+        }
     }
 }
